@@ -1,0 +1,13 @@
+{
+	"autodeskProduct":	"Fusion360",
+	"type":	"addin",
+	"id":	"7c29a4d2-f49d-4609-ac4f-54a57685d0ec",
+	"author":	"Ben Gruver",
+	"description":	{
+		"":	"This add-in serves as a bridge between IDEA/PyCharm and Fusion 360."
+	},
+	"version":	"1.0",
+	"runOnStartup":	true,
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true
+}
