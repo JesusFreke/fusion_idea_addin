@@ -55,8 +55,10 @@ import logging.handlers
 import traceback
 from typing import Optional
 
-# name of asynchronous even which will be used to launch a script inside fusion 360
-CUSTOM_EVENT_NAME = "fusion_idea_addin_run_script"
+# asynchronous event that will be used to launch a script inside fusion 360
+RUN_SCRIPT_EVENT = "fusion_idea_addin_run_script"
+# asynchronous event that will be used to show an error dialog to the user
+ERROR_DIALOG_EVENT = "fusion_idea_addin_error_dialog"
 
 
 def app():
@@ -73,19 +75,17 @@ logger.propagate = False
 
 class AddIn(object):
     def __init__(self):
-        self._event_handler: Optional[DebugScriptEventHandler] = None
-        self._custom_event: Optional[adsk.core.CustomEvent] = None
+        self._run_script_event_handler: Optional[RunScriptEventHandler] = None
+        self._run_script_event: Optional[adsk.core.CustomEvent] = None
+        self._error_dialog_event_handler: Optional[ErrorDialogEventHandler] = None
+        self._error_dialog_event: Optional[adsk.core.CustomEvent] = None
         self._http_server: Optional[HTTPServer] = None
         self._ssdp_server: Optional["SSDPServer"] = None
         self._logging_file_handler: Optional[logging.Handler] = None
+        self._logging_dialog_handler: Optional[logging.Handler] = None
 
     def start(self):
         try:
-            try:
-                app().unregisterCustomEvent(CUSTOM_EVENT_NAME)
-            except Exception:
-                pass
-
             self._logging_file_handler = logging.handlers.RotatingFileHandler(
                 filename=os.path.join(os.path.dirname(os.path.realpath(__file__)), "fusion_idea_addin_log.txt"),
                 maxBytes=2**20,
@@ -94,9 +94,32 @@ class AddIn(object):
             logger.addHandler(self._logging_file_handler)
             logger.setLevel(logging.DEBUG)
 
-            self._custom_event = app().registerCustomEvent(CUSTOM_EVENT_NAME)
-            self._event_handler = DebugScriptEventHandler()
-            self._custom_event.add(self._event_handler)
+            try:
+                app().unregisterCustomEvent(ERROR_DIALOG_EVENT)
+            except Exception:
+                pass
+
+            self._error_dialog_event = app().registerCustomEvent(ERROR_DIALOG_EVENT)
+            self._error_dialog_event_handler = ErrorDialogEventHandler()
+            self._error_dialog_event.add(self._error_dialog_event_handler)
+
+            self._logging_dialog_handler = FusionErrorDialogLoggingHandler()
+            self._logging_dialog_handler.setFormatter(logging.Formatter("%(message)s"))
+            self._logging_dialog_handler.setLevel(logging.FATAL)
+            logger.addHandler(self._logging_dialog_handler)
+        except Exception:
+            # The logging infrastructure may not be set up yet, so we directly show an error dialog instead
+            ui().messageBox("Error while starting fusion_idea_addin.\n\n%s" % traceback.format_exc())
+
+        try:
+            try:
+                app().unregisterCustomEvent(RUN_SCRIPT_EVENT)
+            except Exception:
+                pass
+
+            self._run_script_event = app().registerCustomEvent(RUN_SCRIPT_EVENT)
+            self._run_script_event_handler = RunScriptEventHandler()
+            self._run_script_event.add(self._run_script_event_handler)
 
             # Run the http server on a random port, to avoid conflicts when multiple instances of Fusion 360 are
             # running.
@@ -108,7 +131,7 @@ class AddIn(object):
             ssdp_server_thread = threading.Thread(target=self.run_ssdp_server, daemon=True)
             ssdp_server_thread.start()
         except Exception:
-            ui().messageBox("Error while starting fusion_idea_addin.\n\n%s" % traceback.format_exc())
+            logger.fatal("Error while starting fusion_idea_addin.", exc_info=sys.exc_info())
 
     def run_http_server(self):
         logger.debug("starting http server")
@@ -116,7 +139,7 @@ class AddIn(object):
             with self._http_server:
                 self._http_server.serve_forever()
         except Exception:
-            logger.error("Error occurred while starting the http server.", exc_info=sys.exc_info())
+            logger.fatal("Error occurred while starting the http server.", exc_info=sys.exc_info())
 
     def run_ssdp_server(self):
         logger.debug("starting ssdp server")
@@ -125,7 +148,7 @@ class AddIn(object):
                 self._ssdp_server = server
                 server.serve_forever()
         except Exception:
-            logger.error("Error occurred while starting the ssdp server.", exc_info=sys.exc_info())
+            logger.fatal("Error occurred while starting the ssdp server.", exc_info=sys.exc_info())
 
     def stop(self):
         if self._http_server:
@@ -145,28 +168,48 @@ class AddIn(object):
         self._ssdp_server = None
 
         try:
-            if self._event_handler and self._custom_event:
-                self._custom_event.remove(self._event_handler)
+            if self._run_script_event_handler and self._run_script_event:
+                self._run_script_event.remove(self._run_script_event_handler)
 
-            if self._custom_event:
-                app().unregisterCustomEvent(CUSTOM_EVENT_NAME)
+            if self._run_script_event:
+                app().unregisterCustomEvent(RUN_SCRIPT_EVENT)
         except Exception:
-            logger.error("Error while unregistering fusion_idea_addin's custom event handler.", exc_info=sys.exc_info())
-        self._event_handler = None
-        self._custom_event = None
+            logger.error("Error while unregistering fusion_idea_addin's run_script event handler.",
+                         exc_info=sys.exc_info())
+        self._run_script_event_handler = None
+        self._run_script_event = None
+
+        try:
+            if self._error_dialog_event_handler and self._error_dialog_event:
+                self._error_dialog_event.remove(self._error_dialog_event_handler)
+
+            if self._error_dialog_event:
+                app().unregisterCustomEvent(ERROR_DIALOG_EVENT)
+        except Exception:
+            logger.error("Error while unregistering fusion_idea_addin's error_dialog event handler.",
+                         exc_info=sys.exc_info())
+        self._error_dialog_event_handler = None
+        self._error_dialog_event = None
 
         try:
             if self._logging_file_handler:
                 self._logging_file_handler.close()
                 logger.removeHandler(self._logging_file_handler)
         except Exception:
-            ui().messageBox("Error while closing fusion_idea_addin's logger.\n\n%s"
-                            % traceback.format_exc())
+            ui().messageBox("Error while closing fusion_idea_addin's file logger.\n\n%s" % traceback.format_exc())
         self._logging_file_handler = None
+
+        try:
+            if self._logging_dialog_handler:
+                self._logging_dialog_handler.close()
+                logger.removeHandler(self._logging_dialog_handler)
+        except Exception:
+            ui().messageBox("Error while closing fusion_idea_addin's dialog logger.\n\n%s" % traceback.format_exc())
+        self._logging_dialog_handler = None
 
 
 # noinspection PyUnresolvedReferences
-class DebugScriptEventHandler(adsk.core.CustomEventHandler):
+class RunScriptEventHandler(adsk.core.CustomEventHandler):
     """
     An event handler that can run a python script in the main thread of fusion 360, and initiate debugging.
     """
@@ -191,18 +234,14 @@ class DebugScriptEventHandler(adsk.core.CustomEventHandler):
                         import attach_script
                         attach_script.attach(args["debug_port"], "localhost")
                     except Exception:
-                        logger.error("An error occurred while while starting debugger.", exc_info=sys.exc_info())
-                        ui().messageBox("An error occurred while while starting debugger.\n\n%s" %
-                                        traceback.format_exc())
+                        logger.fatal("An error occurred while while starting debugger.", exc_info=sys.exc_info())
 
                     try:
                         module = importlib.import_module(script_name)
                         importlib.reload(module)
                         module.run({"isApplicationStartup": False})
                     except Exception:
-                        logger.error("Unhandled exception while importing and running script.", exc_info=sys.exc_info())
-                        ui().messageBox("Unhandled exception while importing and running script.\n\n%s" %
-                                        traceback.format_exc())
+                        logger.fatal("Unhandled exception while importing and running script.", exc_info=sys.exc_info())
                 finally:
                     if detach:
                         try:
@@ -213,9 +252,23 @@ class DebugScriptEventHandler(adsk.core.CustomEventHandler):
                     del sys.path[-1]
                     del sys.path[-1]
         except Exception:
-            logger.error("An error occurred while attempting to start script.", exc_info=sys.exc_info())
-            ui().messageBox("An error occurred while attempting to start script.\n\n%s" %
-                            traceback.format_exc())
+            logger.fatal("An error occurred while attempting to start script.", exc_info=sys.exc_info())
+
+
+# noinspection PyUnresolvedReferences
+class ErrorDialogEventHandler(adsk.core.CustomEventHandler):
+    """An event handler that shows an error dialog to the user."""
+
+    # noinspection PyMethodMayBeStatic
+    def notify(self, args):
+        ui().messageBox(args.additionalInfo, "fusion_idea_addin error")
+
+
+class FusionErrorDialogLoggingHandler(logging.Handler):
+    """A logging handler that shows a error dialog to the user in Fusion 360."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        adsk.core.Application.get().fireCustomEvent(ERROR_DIALOG_EVENT, self.format(record))
 
 
 class RunScriptHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -229,7 +282,7 @@ class RunScriptHTTPRequestHandler(BaseHTTPRequestHandler):
         try:
             request_data = json.loads(body.decode())
 
-            adsk.core.Application.get().fireCustomEvent(CUSTOM_EVENT_NAME, json.dumps(request_data))
+            adsk.core.Application.get().fireCustomEvent(RUN_SCRIPT_EVENT, json.dumps(request_data))
 
             self.send_response(200)
             self.end_headers()
