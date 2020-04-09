@@ -266,44 +266,60 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
     def notify(self, args):
         try:
             args = json.loads(args.additionalInfo)
-            script_path = os.path.abspath(args["script"])
-            detach = args["detach"]
+            script_path = args.get("script")
+            debug = int(args["debug"])
             pydevd_path = args["pydevd_path"]
 
-            if os.path.isfile(script_path):
-                script_name = os.path.splitext(os.path.basename(script_path))[0]
-                script_dir = os.path.dirname(script_path)
+            detach = script_path and debug
 
-                sys.path.append(pydevd_path)
-                sys.path.append(os.path.join(pydevd_path, "pydevd_attach_to_process"))
-                sys.path.append(script_dir)
-                try:
+            if not script_path and not debug:
+                logger.warning("No script provided and debugging not requested. There's nothing to do.")
+                return
+
+            sys.path.append(pydevd_path)
+            try:
+                if debug:
+                    sys.path.append(os.path.join(pydevd_path, "pydevd_attach_to_process"))
                     try:
                         import attach_script
-                        logger.debug("Initiating attach")
-                        attach_script.attach(args["debug_port"], "localhost")
+                        port = int(args["debug_port"])
+                        logger.debug("Initiating attach on port %d" % port)
+                        attach_script.attach(port, "localhost")
+                        logger.debug("After attach")
                     except Exception:
                         logger.fatal("An error occurred while while starting debugger.", exc_info=sys.exc_info())
+                    finally:
+                        del(sys.path[-1])  # pydevd_attach_to_process dir
 
+                if script_path:
+                    script_path = os.path.abspath(script_path)
+                    script_name = os.path.splitext(os.path.basename(script_path))[0]
+                    script_dir = os.path.dirname(script_path)
+
+                    sys.path.append(script_dir)
                     try:
                         module = importlib.import_module(script_name)
                         importlib.reload(module)
                         logger.debug("Running script")
                         module.run({"isApplicationStartup": False})
                     except Exception:
-                        logger.fatal("Unhandled exception while importing and running script.", exc_info=sys.exc_info())
-                finally:
-                    if detach:
-                        try:
-                            import pydevd
-                            logger.debug("Detaching")
-                            pydevd.stoptrace()
-                        except Exception:
-                            logger.error("Error while stopping tracing.", exc_info=sys.exc_info())
-                    del sys.path[-1]
-                    del sys.path[-1]
+                        logger.fatal("Unhandled exception while importing and running script.",
+                                     exc_info=sys.exc_info())
+                    finally:
+                        del(sys.path[-1])  # the script dir
+            finally:
+                if detach:
+                    try:
+                        import pydevd
+                        logger.debug("Detaching")
+                        pydevd.stoptrace()
+                    except Exception:
+                        logger.error("Error while stopping tracing.", exc_info=sys.exc_info())
         except Exception:
             logger.fatal("An error occurred while attempting to start script.", exc_info=sys.exc_info())
+        finally:
+            del sys.path[-1]  # The pydevd dir
+
 
 
 # noinspection PyUnresolvedReferences
