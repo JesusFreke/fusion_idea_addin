@@ -41,6 +41,7 @@ script, similarly to how Fusion would normally run it.
 
 import adsk.core
 import adsk.fusion
+import hashlib
 import http.client
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import importlib
@@ -57,8 +58,23 @@ from typing import Optional
 
 # asynchronous event that will be used to launch a script inside fusion 360
 RUN_SCRIPT_EVENT = "fusion_idea_addin_run_script"
+# asynchronous event that will be used to ask user's confirmation before launching a script inside fusion 360
+VERIFY_RUN_SCRIPT_EVENT = "fusion_idea_addin_verify_run_script"
 # asynchronous event that will be used to show an error dialog to the user
 ERROR_DIALOG_EVENT = "fusion_idea_addin_error_dialog"
+
+# If true, the user must confirm the initial connection of a debugger
+REQUIRE_CONFIRMATION = True
+
+if REQUIRE_CONFIRMATION:
+    try:
+        # noinspection PyUnresolvedReferences
+        import rsa
+    except ModuleNotFoundError:
+        sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), "rsa-4.0-py2.py3-none-any.whl"))
+        # noinspection PyUnresolvedReferences
+        import rsa
+        del(sys.path[-1])
 
 
 def app():
@@ -77,12 +93,16 @@ class AddIn(object):
     def __init__(self):
         self._run_script_event_handler: Optional[RunScriptEventHandler] = None
         self._run_script_event: Optional[adsk.core.CustomEvent] = None
+        self._verify_run_script_event_handler: Optional[VerifyRunScriptEventHandler] = None
+        self._verify_run_script_event: Optional[adsk.core.CustomEvent] = None
         self._error_dialog_event_handler: Optional[ErrorDialogEventHandler] = None
         self._error_dialog_event: Optional[adsk.core.CustomEvent] = None
         self._http_server: Optional[HTTPServer] = None
-        self._ssdp_server: Optional["SSDPServer"] = None
+        self._ssdp_server: Optional[SSDPServer] = None
         self._logging_file_handler: Optional[logging.Handler] = None
         self._logging_dialog_handler: Optional[logging.Handler] = None
+
+        self._trusted_keys = {}
 
     def start(self):
         try:
@@ -110,6 +130,7 @@ class AddIn(object):
         except Exception:
             # The logging infrastructure may not be set up yet, so we directly show an error dialog instead
             ui().messageBox("Error while starting fusion_idea_addin.\n\n%s" % traceback.format_exc())
+            return
 
         try:
             try:
@@ -120,6 +141,15 @@ class AddIn(object):
             self._run_script_event = app().registerCustomEvent(RUN_SCRIPT_EVENT)
             self._run_script_event_handler = RunScriptEventHandler()
             self._run_script_event.add(self._run_script_event_handler)
+
+            try:
+                app().unregisterCustomEvent(VERIFY_RUN_SCRIPT_EVENT)
+            except Exception:
+                pass
+
+            self._verify_run_script_event = app().registerCustomEvent(VERIFY_RUN_SCRIPT_EVENT)
+            self._verify_run_script_event_handler = VerifyRunScriptEventHandler()
+            self._verify_run_script_event.add(self._verify_run_script_event_handler)
 
             # Run the http server on a random port, to avoid conflicts when multiple instances of Fusion 360 are
             # running.
@@ -134,7 +164,7 @@ class AddIn(object):
             logger.fatal("Error while starting fusion_idea_addin.", exc_info=sys.exc_info())
 
     def run_http_server(self):
-        logger.debug("starting http server")
+        logger.debug("starting http server: port=%d" % self._http_server.server_port)
         try:
             with self._http_server:
                 self._http_server.serve_forever()
@@ -149,6 +179,12 @@ class AddIn(object):
                 server.serve_forever()
         except Exception:
             logger.fatal("Error occurred while starting the ssdp server.", exc_info=sys.exc_info())
+
+    def get_trusted_key_nonce(self, key) -> Optional[int]:
+        return self._trusted_keys.get(key)
+
+    def set_trusted_key_nonce(self, key, nonce: int):
+        self._trusted_keys[key] = nonce
 
     def stop(self):
         if self._http_server:
@@ -178,6 +214,18 @@ class AddIn(object):
                          exc_info=sys.exc_info())
         self._run_script_event_handler = None
         self._run_script_event = None
+
+        try:
+            if self._verify_run_script_event_handler and self._verify_run_script_event:
+                self._verify_run_script_event.remove(self._verify_run_script_event_handler)
+
+            if self._verify_run_script_event:
+                app().unregisterCustomEvent(VERIFY_RUN_SCRIPT_EVENT)
+        except Exception:
+            logger.error("Error while unregistering fusion_idea_addin's verify_run_script event handler.",
+                         exc_info=sys.exc_info())
+        self._verify_run_script_event_handler = None
+        self._verify_run_script_event = None
 
         try:
             if self._error_dialog_event_handler and self._error_dialog_event:
@@ -232,6 +280,7 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
                 try:
                     try:
                         import attach_script
+                        logger.debug("Initiating attach")
                         attach_script.attach(args["debug_port"], "localhost")
                     except Exception:
                         logger.fatal("An error occurred while while starting debugger.", exc_info=sys.exc_info())
@@ -239,6 +288,7 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
                     try:
                         module = importlib.import_module(script_name)
                         importlib.reload(module)
+                        logger.debug("Running script")
                         module.run({"isApplicationStartup": False})
                     except Exception:
                         logger.fatal("Unhandled exception while importing and running script.", exc_info=sys.exc_info())
@@ -246,6 +296,7 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
                     if detach:
                         try:
                             import pydevd
+                            logger.debug("Detaching")
                             pydevd.stoptrace()
                         except Exception:
                             logger.error("Error while stopping tracing.", exc_info=sys.exc_info())
@@ -253,6 +304,47 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
                     del sys.path[-1]
         except Exception:
             logger.fatal("An error occurred while attempting to start script.", exc_info=sys.exc_info())
+
+
+# noinspection PyUnresolvedReferences
+class VerifyRunScriptEventHandler(adsk.core.CustomEventHandler):
+    """
+    An event handler that will verify the debugger connection with the user, and then launch a script.
+    """
+
+    # noinspection PyMethodMayBeStatic
+    def notify(self, args):
+        try:
+            request_json = json.loads(args.additionalInfo)
+
+            (return_value, cancelled) = ui().inputBox(
+                "New fusion_idea debugger connection detected.\n"
+                "\n"
+                "Please enter the debugger's public key hash below to proceed.\n"
+                "This can be found in IDEA/PyCharm's console.\n"
+                "\n"
+                "If you did not initiate or expect this connection, you can press\n"
+                "cancel to abort the debugging attempt.", "Debugging Verification")
+
+            if cancelled:
+                return
+
+            pubkey_string = request_json["pubkey_modulus"] + ":" + request_json["pubkey_exponent"]
+
+            sha1 = hashlib.sha1()
+            sha1.update(pubkey_string.encode())
+
+            expected_hash = bytes.hex(sha1.digest())
+
+            if return_value.upper() == expected_hash.upper():
+                inner_request = json.loads(request_json["message"])
+                addin.set_trusted_key_nonce(pubkey_string, inner_request["nonce"])
+                adsk.core.Application.get().fireCustomEvent(RUN_SCRIPT_EVENT, request_json["message"])
+            else:
+                ui().messageBox("The public key does not match. Aborting.")
+        except Exception:
+            logger.fatal("An error occurred while attempting to verify the debugging connection.",
+                         exc_info=sys.exc_info())
 
 
 # noinspection PyUnresolvedReferences
@@ -276,13 +368,36 @@ class RunScriptHTTPRequestHandler(BaseHTTPRequestHandler):
 
     # noinspection PyPep8Naming
     def do_POST(self):
+        logger.debug("Got an http request.")
         content_length = int(self.headers["Content-Length"])
-        body = self.rfile.read(content_length)
+        body = self.rfile.read(content_length).decode()
 
         try:
-            request_data = json.loads(body.decode())
+            request_json = json.loads(body)
 
-            adsk.core.Application.get().fireCustomEvent(RUN_SCRIPT_EVENT, json.dumps(request_data))
+            if REQUIRE_CONFIRMATION:
+                pubkey = rsa.PublicKey(int(request_json["pubkey_modulus"]), int(request_json["pubkey_exponent"]))
+                pubkey_string = request_json["pubkey_modulus"] + ":" + request_json["pubkey_exponent"]
+                rsa.verify(request_json["message"].encode(), bytes.fromhex(request_json["signature"]), pubkey)
+
+                nonce = addin.get_trusted_key_nonce(pubkey_string)
+
+                if nonce is None:
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b"done")
+                    self.finish()
+                    adsk.core.Application.get().fireCustomEvent(VERIFY_RUN_SCRIPT_EVENT, json.dumps(request_json))
+                    return
+
+                inner_request = json.loads(request_json["message"])
+
+                if inner_request["nonce"] <= nonce:
+                    raise ValueError("Invalid nonce")
+
+                addin.set_trusted_key_nonce(pubkey_string, inner_request["nonce"])
+
+            adsk.core.Application.get().fireCustomEvent(RUN_SCRIPT_EVENT, request_json["message"])
 
             self.send_response(200)
             self.end_headers()
