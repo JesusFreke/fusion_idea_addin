@@ -49,7 +49,9 @@ import io
 import json
 import logging
 import os
+import socket
 import socketserver
+import struct
 import sys
 import threading
 import logging.handlers
@@ -459,10 +461,18 @@ class SSDPRequestHandler(socketserver.BaseRequestHandler):
 
 class SSDPServer(socketserver.UDPServer):
 
+    # Random address in the "administrative" block
+    MULTICAST_GROUP = "239.172.243.75"
+
     def __init__(self, debug_port):
         self.debug_port = debug_port
         self.allow_reuse_address = True
-        super().__init__(("127.0.0.1", 1900), SSDPRequestHandler)
+        super().__init__(("", 1900), SSDPRequestHandler)
+
+    def server_bind(self):
+        super().server_bind()
+        req = struct.pack("=4s4s", socket.inet_aton(self.MULTICAST_GROUP), socket.inet_aton("127.0.0.1"))
+        self.socket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, req)
 
     def handle_error(self, request, client_address):
         logger.error("An error occurred while processing ssdp request.", exc_info=sys.exc_info())
