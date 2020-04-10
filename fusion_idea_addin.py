@@ -100,7 +100,8 @@ class AddIn(object):
         self._error_dialog_event_handler: Optional[ErrorDialogEventHandler] = None
         self._error_dialog_event: Optional[adsk.core.CustomEvent] = None
         self._http_server: Optional[HTTPServer] = None
-        self._ssdp_server: Optional[SSDPServer] = None
+        self._ssdpv4_server: Optional[SSDPV4Server] = None
+        self._ssdpv6_server: Optional[SSDPV6Server] = None
         self._logging_file_handler: Optional[logging.Handler] = None
         self._logging_dialog_handler: Optional[logging.Handler] = None
 
@@ -160,8 +161,11 @@ class AddIn(object):
             http_server_thread = threading.Thread(target=self.run_http_server, daemon=True)
             http_server_thread.start()
 
-            ssdp_server_thread = threading.Thread(target=self.run_ssdp_server, daemon=True)
-            ssdp_server_thread.start()
+            ssdpv4_server_thread = threading.Thread(target=self.run_ssdpv4_server, daemon=True)
+            ssdpv4_server_thread.start()
+
+            ssdpv6_server_thread = threading.Thread(target=self.run_ssdpv6_server, daemon=True)
+            ssdpv6_server_thread.start()
         except Exception:
             logger.fatal("Error while starting fusion_idea_addin.", exc_info=sys.exc_info())
 
@@ -173,11 +177,20 @@ class AddIn(object):
         except Exception:
             logger.fatal("Error occurred while starting the http server.", exc_info=sys.exc_info())
 
-    def run_ssdp_server(self):
-        logger.debug("starting ssdp server")
+    def run_ssdpv4_server(self):
+        logger.debug("starting ssdp ipv4 server")
         try:
-            with SSDPServer(self._http_server.server_port) as server:
-                self._ssdp_server = server
+            with SSDPV4Server(self._http_server.server_port) as server:
+                self._ssdpv4_server = server
+                server.serve_forever()
+        except Exception:
+            logger.fatal("Error occurred while starting the ssdp server.", exc_info=sys.exc_info())
+
+    def run_ssdpv6_server(self):
+        logger.debug("starting ssdp ipv6 server")
+        try:
+            with SSDPV6Server(self._http_server.server_port) as server:
+                self._ssdpv6_server = server
                 server.serve_forever()
         except Exception:
             logger.fatal("Error occurred while starting the ssdp server.", exc_info=sys.exc_info())
@@ -197,13 +210,21 @@ class AddIn(object):
                 logger.error("Error while stopping fusion_idea_addin's HTTP server.", exc_info=sys.exc_info())
         self._http_server = None
 
-        if self._ssdp_server:
+        if self._ssdpv4_server:
             try:
-                self._ssdp_server.shutdown()
-                self._ssdp_server.server_close()
+                self._ssdpv4_server.shutdown()
+                self._ssdpv4_server.server_close()
             except Exception:
-                logger.error("Error while stopping fusion_idea_addin's SSDP server.", exc_info=sys.exc_info())
-        self._ssdp_server = None
+                logger.error("Error while stopping fusion_idea_addin's SSDP ipv4 server.", exc_info=sys.exc_info())
+        self._ssdpv4_server = None
+
+        if self._ssdpv6_server:
+            try:
+                self._ssdpv6_server.shutdown()
+                self._ssdpv6_server.server_close()
+            except Exception:
+                logger.error("Error while stopping fusion_idea_addin's SSDP ipv6 server.", exc_info=sys.exc_info())
+        self._ssdpv6_server = None
 
         try:
             if self._run_script_event_handler and self._run_script_event:
@@ -323,7 +344,6 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
             del sys.path[-1]  # The pydevd dir
 
 
-
 # noinspection PyUnresolvedReferences
 class VerifyRunScriptEventHandler(adsk.core.CustomEventHandler):
     """
@@ -431,7 +451,7 @@ class SSDPRequestHandler(socketserver.BaseRequestHandler):
 
     def handle(self):
         data = self.request[0].strip()
-        socket = self.request[1]
+        sock = self.request[1]
 
         logger.log(logging.DEBUG, "got ssdp request:\n%s" % data)
 
@@ -453,13 +473,41 @@ class SSDPRequestHandler(socketserver.BaseRequestHandler):
                            "pid": os.getpid(),
                            "debug_port": self.server.debug_port}
 
-            logger.debug("responding to ssdp request")
-            socket.sendto(response.encode("utf-8"), self.client_address)
+            logger.debug("responding to ssdp request: %s" % str(self.client_address))
+            sock.sendto(response.encode("utf-8"), self.client_address)
         else:
             logger.warning("Got an unexpected ssdp request:\n%s" % data)
 
 
-class SSDPServer(socketserver.UDPServer):
+class SSDPV6Server(socketserver.UDPServer):
+
+    # Random "interface local" multicast address
+    MULTICAST_ADDR = "ff01:fb68:e6b7:45f9:4acc:2559:6c6e:c014"
+
+    def __init__(self, debug_port):
+        self.debug_port = debug_port
+        self.allow_reuse_address = True
+        self.address_family = socket.AF_INET6
+        super().__init__(("", 1900), SSDPRequestHandler)
+
+    def server_bind(self):
+        super().server_bind()
+
+        if hasattr(socket, "IPPROTO_V6"):
+            IPPROTO_V6 = socket.IPPROTO_V6
+        else:
+            # This isn't present in Fusion's Python 3.7 distribution, at least on Windows.
+            # This is the value from, e.g. glibc's <netinet/in.h>
+            IPPROTO_V6 = 41
+
+        req = struct.pack("=16si", socket.inet_pton(socket.AF_INET6, self.MULTICAST_ADDR), 0)
+        self.socket.setsockopt(IPPROTO_V6, socket.IPV6_JOIN_GROUP, req)
+
+    def handle_error(self, request, client_address):
+        logger.error("An error occurred while processing ssdp request.", exc_info=sys.exc_info())
+
+
+class SSDPV4Server(socketserver.UDPServer):
 
     # Random address in the "administrative" block
     MULTICAST_GROUP = "239.172.243.75"
