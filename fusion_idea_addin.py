@@ -59,6 +59,8 @@ import logging.handlers
 import traceback
 from typing import Optional
 
+VERSION = "1.0"
+
 # asynchronous event that will be used to launch a script inside fusion 360
 RUN_SCRIPT_EVENT = "fusion_idea_addin_run_script"
 # asynchronous event that will be used to ask user's confirmation before launching a script inside fusion 360
@@ -470,6 +472,7 @@ class SSDPRequestHandler(socketserver.BaseRequestHandler):
             response = ("HTTP/1.1 200 OK\r\n"
                         "ST: fusion_idea:debug\r\n"
                         "USN: pid:%(pid)d\r\n"
+                        "SERVER: fusion_idea/" + VERSION + "\r\n"
                         "Location: 127.0.0.1:%(debug_port)d\r\n\r\n") % {
                            "pid": os.getpid(),
                            "debug_port": self.server.debug_port}
