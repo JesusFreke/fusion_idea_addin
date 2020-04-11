@@ -519,7 +519,7 @@ class SSDPV6Server(socketserver.UDPServer):
             # what interface, because the java side seems to send a packet on all possible interfaces (from watching
             # wireshark at least..), but since it's a node-local multicast address, the packet shouldn't actually be
             # sent to any network, regardless of which interface is used.
-            # Note that it doesn't seem possible to send multicasts on loopback interface.
+            # Note that it doesn't seem possible to send multicasts on the loopback interface on Windows.
             req = struct.pack("=16si", socket.inet_pton(socket.AF_INET6, self.MULTICAST_ADDR), socket.INADDR_ANY)
             self.socket.setsockopt(IPPROTO_V6, socket.IPV6_JOIN_GROUP, req)
 
