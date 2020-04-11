@@ -505,14 +505,14 @@ class SSDPV6Server(socketserver.UDPServer):
         if hasattr(socket, "if_nameindex"):
             # An error is thrown if we try to use INADDR_ANY on mac. But the loopback interface does work, so we
             # have that going for us. It's typically called lo0, but we'll look for "lo", or "loNNN" just in case.
-            name_pattern = re.compile(")
+            found_iface = False
             for (index, name) in socket.if_nameindex():
                 if re.fullmatch("^lo[0-9]+$", name):
                     req = struct.pack("=16si", socket.inet_pton(socket.AF_INET6, self.MULTICAST_ADDR), index)
                     self.socket.setsockopt(IPPROTO_V6, socket.IPV6_JOIN_GROUP, req)
                     found_iface = True
                     break
-             if not found_iface:
+            if not found_iface:
                 logger.fatal("Could not start ssdp server")
         else:
             # On windows, hopefully we can rely on INADDR_ANY choosing an appropriate interface.interface.
@@ -520,6 +520,7 @@ class SSDPV6Server(socketserver.UDPServer):
             # interfaces (from watching wireshark at least..), but since it's a node-local multicast address, the
             # packet shouldn't actually be sent to any network, regardless of which interface is used.
             req = struct.pack("=16si", socket.inet_pton(socket.AF_INET6, self.MULTICAST_ADDR), socket.INADDR_ANY)
+            self.socket.setsockopt(IPPROTO_V6, socket.IPV6_JOIN_GROUP, req)
 
     def handle_error(self, request, client_address):
         logger.error("An error occurred while processing ssdp request.", exc_info=sys.exc_info())
