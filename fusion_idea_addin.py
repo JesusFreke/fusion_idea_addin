@@ -501,7 +501,7 @@ class SSDPV6Server(socketserver.UDPServer):
             # This is the value from, e.g. glibc's <netinet/in.h>
             IPPROTO_V6 = 41
 
-        # if_nameindex isn't implemented on windows (at least, prior to Python 3.8)
+        # if_nameindex isn't implemented on Windows (at least, prior to Python 3.8)
         if hasattr(socket, "if_nameindex"):
             # An error is thrown if we try to use INADDR_ANY on mac. But the loopback interface does work, so we
             # have that going for us. It's typically called lo0, but we'll look for "lo", or "loNNN" just in case.
@@ -513,12 +513,13 @@ class SSDPV6Server(socketserver.UDPServer):
                     found_iface = True
                     break
             if not found_iface:
-                logger.fatal("Could not start ssdp server")
+                raise Exception("Could not start ssdp server")
         else:
-            # On windows, hopefully we can rely on INADDR_ANY choosing an appropriate interface.interface.
-            # We don't really care what interface, because the java side seems to send a packet on all possible
-            # interfaces (from watching wireshark at least..), but since it's a node-local multicast address, the
-            # packet shouldn't actually be sent to any network, regardless of which interface is used.
+            # On Windows, hopefully we can rely on INADDR_ANY choosing an appropriate interface. We don't really care
+            # what interface, because the java side seems to send a packet on all possible interfaces (from watching
+            # wireshark at least..), but since it's a node-local multicast address, the packet shouldn't actually be
+            # sent to any network, regardless of which interface is used.
+            # Note that it doesn't seem possible to send multicasts on loopback interface.
             req = struct.pack("=16si", socket.inet_pton(socket.AF_INET6, self.MULTICAST_ADDR), socket.INADDR_ANY)
             self.socket.setsockopt(IPPROTO_V6, socket.IPV6_JOIN_GROUP, req)
 
