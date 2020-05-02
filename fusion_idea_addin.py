@@ -329,6 +329,13 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
                         spec = importlib.util.spec_from_file_location(
                             module_name, script_path, submodule_search_locations=[script_dir])
                         module = importlib.util.module_from_spec(spec)
+
+                        existing_module = sys.modules.get(module_name)
+                        if existing_module and hasattr(existing_module, "stop"):
+                            existing_module.stop({"isApplicationClosing": False})
+
+                        self.unload_submodules(module_name)
+
                         sys.modules[module_name] = module
                         spec.loader.exec_module(module)
                         logger.debug("Running script")
@@ -348,6 +355,16 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
             logger.fatal("An error occurred while attempting to start script.", exc_info=sys.exc_info())
         finally:
             del sys.path[-1]  # The pydevd dir
+
+    @staticmethod
+    def unload_submodules(module_name):
+        search_prefix = module_name + '.'
+        loaded_submodules = []
+        for loaded_module_name in sys.modules:
+            if loaded_module_name.startswith(search_prefix):
+                loaded_submodules.append(loaded_module_name)
+        for loaded_submodule in loaded_submodules:
+            del sys.modules[loaded_submodule]
 
 
 # noinspection PyUnresolvedReferences
