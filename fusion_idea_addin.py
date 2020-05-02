@@ -45,9 +45,11 @@ import hashlib
 import http.client
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import importlib
+import importlib.util
 import io
 import json
 import logging
+import logging.handlers
 import os
 import re
 import socket
@@ -55,9 +57,9 @@ import socketserver
 import struct
 import sys
 import threading
-import logging.handlers
 import traceback
 from typing import Optional
+import urllib.parse
 
 VERSION = "1.0"
 
@@ -319,20 +321,21 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
 
                 if script_path:
                     script_path = os.path.abspath(script_path)
-                    script_name = os.path.splitext(os.path.basename(script_path))[0]
                     script_dir = os.path.dirname(script_path)
 
-                    sys.path.append(script_dir)
                     try:
-                        module = importlib.import_module(script_name)
-                        importlib.reload(module)
+                        # This mostly mimics the package name that Fusion uses when running the script
+                        module_name = "__main__" + urllib.parse.quote(script_path.replace('.', '_'))
+                        spec = importlib.util.spec_from_file_location(
+                            module_name, script_path, submodule_search_locations=[script_dir])
+                        module = importlib.util.module_from_spec(spec)
+                        sys.modules[module_name] = module
+                        spec.loader.exec_module(module)
                         logger.debug("Running script")
                         module.run({"isApplicationStartup": False})
                     except Exception:
                         logger.fatal("Unhandled exception while importing and running script.",
                                      exc_info=sys.exc_info())
-                    finally:
-                        del(sys.path[-1])  # the script dir
             finally:
                 if detach:
                     try:
