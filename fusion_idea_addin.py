@@ -61,7 +61,7 @@ import traceback
 from typing import Optional
 import urllib.parse
 
-VERSION = "1.0"
+VERSION = "1.1"
 
 # asynchronous event that will be used to launch a script inside fusion 360
 RUN_SCRIPT_EVENT = "fusion_idea_addin_run_script"
