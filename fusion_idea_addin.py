@@ -399,7 +399,7 @@ class VerifyRunScriptEventHandler(adsk.core.CustomEventHandler):
 
             if return_value.upper() == expected_hash.upper():
                 inner_request = json.loads(request_json["message"])
-                addin.set_trusted_key_nonce(pubkey_string, inner_request["nonce"])
+                addin.set_trusted_key_nonce(pubkey_string, int(inner_request["nonce"]))
                 adsk.core.Application.get().fireCustomEvent(RUN_SCRIPT_EVENT, request_json["message"])
             else:
                 ui().messageBox("The public key does not match. Aborting.")
@@ -441,9 +441,9 @@ class RunScriptHTTPRequestHandler(BaseHTTPRequestHandler):
                 pubkey_string = request_json["pubkey_modulus"] + ":" + request_json["pubkey_exponent"]
                 rsa.verify(request_json["message"].encode(), bytes.fromhex(request_json["signature"]), pubkey)
 
-                nonce = addin.get_trusted_key_nonce(pubkey_string)
+                previous_nonce = addin.get_trusted_key_nonce(pubkey_string)
 
-                if nonce is None:
+                if previous_nonce is None:
                     self.send_response(200)
                     self.end_headers()
                     self.wfile.write(b"done")
@@ -453,10 +453,12 @@ class RunScriptHTTPRequestHandler(BaseHTTPRequestHandler):
 
                 inner_request = json.loads(request_json["message"])
 
-                if inner_request["nonce"] <= nonce:
-                    raise ValueError("Invalid nonce")
+                current_nonce = int(inner_request["nonce"])
 
-                addin.set_trusted_key_nonce(pubkey_string, inner_request["nonce"])
+                if current_nonce <= previous_nonce:
+                    raise ValueError("Invalid nonce: %s/%s" % (current_nonce, previous_nonce))
+
+                addin.set_trusted_key_nonce(pubkey_string, current_nonce)
 
             adsk.core.Application.get().fireCustomEvent(RUN_SCRIPT_EVENT, request_json["message"])
 
