@@ -327,7 +327,10 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
                         # This mostly mimics the package name that Fusion uses when running the script
                         module_name = "__main__" + urllib.parse.quote(script_path.replace('.', '_'))
                         spec = importlib.util.spec_from_file_location(
-                            module_name, script_path, submodule_search_locations=[script_dir])
+                            module_name, script_path,
+                            loader=importlib.machinery.SourceFileLoader(module_name, script_path),
+                            submodule_search_locations=[script_dir])
+
                         module = importlib.util.module_from_spec(spec)
 
                         existing_module = sys.modules.get(module_name)
