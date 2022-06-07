@@ -51,6 +51,7 @@ import json
 import logging
 import logging.handlers
 import os
+import platform
 import re
 import socket
 import socketserver
@@ -529,8 +530,7 @@ class SSDPV6Server(socketserver.UDPServer):
             # This is the value from, e.g. glibc's <netinet/in.h>
             IPPROTO_V6 = 41
 
-        # if_nameindex isn't implemented on Windows (at least, prior to Python 3.8)
-        if hasattr(socket, "if_nameindex"):
+        if platform.system() != "Windows":
             # An error is thrown if we try to use INADDR_ANY on mac. But the loopback interface does work, so we
             # have that going for us. It's typically called lo0, but we'll look for "lo", or "loNNN" just in case.
             found_iface = False
