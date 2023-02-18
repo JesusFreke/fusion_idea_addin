@@ -518,14 +518,11 @@ class SSDPRequestHandler(socketserver.BaseRequestHandler):
 
 class SSDPV6Server(socketserver.UDPServer):
 
-    # Random "interface local" multicast address
-    MULTICAST_ADDR = "ff01:fb68:e6b7:45f9:4acc:2559:6c6e:c014"
-
     def __init__(self, debug_port):
         self.debug_port = debug_port
         self.allow_reuse_address = True
         self.address_family = socket.AF_INET6
-        super().__init__((LOCALHOST_IPV6, MULTICAST_PORT), SSDPRequestHandler)
+        super().__init__(("", MULTICAST_PORT), SSDPRequestHandler)
 
     def server_bind(self):
         super().server_bind()
@@ -556,7 +553,7 @@ class SSDPV6Server(socketserver.UDPServer):
             # sent to any network, regardless of which interface is used.
             # Note that it doesn't seem possible to send multicasts on the loopback interface on Windows.
             req = struct.pack("=16si", socket.inet_pton(socket.AF_INET6, MULTICAST_GROUP_IPV6), socket.INADDR_ANY)
-            IPPROTO_IPV6.setsockopt(IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, req)
+            self.socket.setsockopt(IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, req)
 
         logger.debug("SSDP server IPv6 bound to IP address: %s, Port: %d" % self.socket.getsockname()[:2])
 
