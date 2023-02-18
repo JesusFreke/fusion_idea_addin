@@ -71,6 +71,13 @@ VERIFY_RUN_SCRIPT_EVENT = "fusion_idea_addin_verify_run_script"
 # asynchronous event that will be used to show an error dialog to the user
 ERROR_DIALOG_EVENT = "fusion_idea_addin_error_dialog"
 
+LOCALHOST_IPV6 = "::1"
+LOCALHOST_IPV4 = "127.0.0.1"
+MULTICAST_PORT = 1900
+# Random multicast group addresses in the "administrative" block:
+MULTICAST_GROUP_IPV6 = "ff01:fb68:e6b7:45f9:4acc:2559:6c6e:c014"
+MULTICAST_GROUP_IPV4 = "239.172.243.75"
+
 # If true, the user must confirm the initial connection of a debugger
 REQUIRE_CONFIRMATION = True
 
@@ -518,17 +525,17 @@ class SSDPV6Server(socketserver.UDPServer):
         self.debug_port = debug_port
         self.allow_reuse_address = True
         self.address_family = socket.AF_INET6
-        super().__init__(("", 1900), SSDPRequestHandler)
+        super().__init__((LOCALHOST_IPV6, MULTICAST_PORT), SSDPRequestHandler)
 
     def server_bind(self):
         super().server_bind()
 
-        if hasattr(socket, "IPPROTO_V6"):
-            IPPROTO_V6 = socket.IPPROTO_V6
+        if hasattr(socket, "IPPROTO_IPV6"):
+            IPPROTO_IPV6 = socket.IPPROTO_IPV6
         else:
             # This isn't present in Fusion's Python 3.7 distribution, at least on Windows.
             # This is the value from, e.g. glibc's <netinet/in.h>
-            IPPROTO_V6 = 41
+            IPPROTO_IPV6 = 41
 
         if platform.system() != "Windows":
             # An error is thrown if we try to use INADDR_ANY on mac. But the loopback interface does work, so we
@@ -536,8 +543,8 @@ class SSDPV6Server(socketserver.UDPServer):
             found_iface = False
             for (index, name) in socket.if_nameindex():
                 if re.fullmatch("^lo[0-9]+$", name):
-                    req = struct.pack("=16si", socket.inet_pton(socket.AF_INET6, self.MULTICAST_ADDR), index)
-                    self.socket.setsockopt(IPPROTO_V6, socket.IPV6_JOIN_GROUP, req)
+                    req = struct.pack("=16si", socket.inet_pton(socket.AF_INET6, MULTICAST_GROUP_IPV6), index)
+                    self.socket.setsockopt(IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, req)
                     found_iface = True
                     break
             if not found_iface:
@@ -548,8 +555,10 @@ class SSDPV6Server(socketserver.UDPServer):
             # wireshark at least..), but since it's a node-local multicast address, the packet shouldn't actually be
             # sent to any network, regardless of which interface is used.
             # Note that it doesn't seem possible to send multicasts on the loopback interface on Windows.
-            req = struct.pack("=16si", socket.inet_pton(socket.AF_INET6, self.MULTICAST_ADDR), socket.INADDR_ANY)
-            self.socket.setsockopt(IPPROTO_V6, socket.IPV6_JOIN_GROUP, req)
+            req = struct.pack("=16si", socket.inet_pton(socket.AF_INET6, MULTICAST_GROUP_IPV6), socket.INADDR_ANY)
+            IPPROTO_IPV6.setsockopt(IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, req)
+
+        logger.debug("SSDP server IPv6 bound to IP address: %s, Port: %d" % self.socket.getsockname()[:2])
 
     def handle_error(self, request, client_address):
         logger.error("An error occurred while processing ssdp request.", exc_info=sys.exc_info())
@@ -557,18 +566,16 @@ class SSDPV6Server(socketserver.UDPServer):
 
 class SSDPV4Server(socketserver.UDPServer):
 
-    # Random address in the "administrative" block
-    MULTICAST_GROUP = "239.172.243.75"
-
     def __init__(self, debug_port):
         self.debug_port = debug_port
         self.allow_reuse_address = True
-        super().__init__(("", 1900), SSDPRequestHandler)
+        super().__init__(("", MULTICAST_PORT), SSDPRequestHandler)
 
     def server_bind(self):
         super().server_bind()
-        req = struct.pack("=4s4s", socket.inet_aton(self.MULTICAST_GROUP), socket.inet_aton("127.0.0.1"))
+        req = struct.pack("=4s4s", socket.inet_aton(MULTICAST_GROUP_IPV4), socket.inet_aton(LOCALHOST_IPV4))
         self.socket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, req)
+        logger.debug("SSDP server IPv4 bound to IP address: %s, Port: %d" % self.socket.getsockname())
 
     def handle_error(self, request, client_address):
         logger.error("An error occurred while processing ssdp request.", exc_info=sys.exc_info())
