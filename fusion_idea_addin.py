@@ -312,7 +312,8 @@ class RunScriptEventHandler(adsk.core.CustomEventHandler):
                 logger.warning("No script provided and debugging not requested. There's nothing to do.")
                 return
 
-            sys.path.append(pydevd_path)
+            if pydevd_path not in sys.path:
+                sys.path.append(pydevd_path)
             try:
                 if debug:
                     sys.path.append(os.path.join(pydevd_path, "pydevd_attach_to_process"))
